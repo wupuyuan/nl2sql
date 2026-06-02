@@ -1,47 +1,61 @@
 import os
 import json
+from pathlib import Path
 import httpx
 from typing import Optional, List, Dict, Any
 from models import Filter, SemanticResponse
 
 
-LLM_API_URL = os.getenv("LLM_API_URL", "http://192.168.0.106:1234/api/v1/chat")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen/qwen3.6-35b-a3b")
+# 尝试读取 agent-service 的 config.json（与主服务共用配置）
+_config_path = Path(__file__).resolve().parent.parent / "agent-service" / "config.json"
+_shared_config = {}
+if _config_path.exists():
+    try:
+        _shared_config = json.loads(_config_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
+LLM_API_URL = os.getenv(
+    "LLM_API_URL",
+    _shared_config.get("api_url") or (_shared_config.get("base_url") or "http://192.168.0.106:1234") + "/v1/chat/completions",
+)
+LLM_MODEL = os.getenv("LLM_MODEL", _shared_config.get("model", "qwen/qwen3.6-35b-a3b"))
+LLM_API_KEY = os.getenv("LLM_API_KEY", _shared_config.get("api_key", ""))
 
 
 CUBE_SCHEMA_PROMPT = """
 你是数据语义解析专家。你的任务是将用户的自然语言查询转换为结构化的语义 DSL。
 
-## 可用的数据立方体（Cube）：
+## 可用的数据表：
 
-### orders（订单数据）
-描述：订单数据立方体，包含订单数量、金额等指标
+### demo_orders（订单测试表）
+描述：订单数据表，包含订单数量、金额、利润、成本等指标
 
 **指标（Metrics）：**
 - `order_cnt`: 订单数量（COUNT）
-- `amount`: 订单总金额（SUM）
-- `avg_amount`: 平均订单金额（AVG）
-- `max_amount`: 最大订单金额（MAX）
-- `min_amount`: 最小订单金额（MIN）
-- `product_sales`: 产品销售额（SUM of amount）
-- `product_orders`: 产品订单数（COUNT）
+- `amount`: 订单总金额（SUM(amount)）
+- `avg_amount`: 平均订单金额（AVG(amount)）
+- `max_amount`: 最大订单金额（MAX(amount)）
+- `min_amount`: 最小订单金额（MIN(amount)）
+- `cost`: 成本（SUM(CASE WHEN order_type = 1 THEN amount ELSE 0 END)）
+- `profit`: 利润（SUM(CASE WHEN order_type = 2 THEN amount ELSE 0 END) - SUM(CASE WHEN order_type = 1 THEN amount ELSE 0 END)）
 
 **维度（Dimensions）：**
-- `product`: 产品
-- `category`: 类别
-- `region`: 地区
+- `order_name`: 订单名称
+- `order_detail`: 订单明细
 - `order_status`: 订单状态（1=正常，-1=作废）
 - `order_type`: 订单类型（1=采购，2=销售）
+- `create_time`: 创建时间
 
 **业务语义规则：**
-- "利润" = 销售订单金额(order_type=2) - 采购订单金额(order_type=1)
-- "销售额" = amount (所有订单)
-- "采购额" = amount where order_type=1
+- "成本" = cost（内部已固定采购订单）
+- "利润" = profit（内部已处理销售-采购）
 - "销售额" = amount where order_type=2
+- "采购额" = amount where order_type=1
 - "订单数" = order_cnt
 - "平均金额" = avg_amount
-- "北京/上海/广州" = region 维度过滤
 - "今天/本周/本月" = create_time 时间范围过滤
+- 默认只查有效订单（order_status=1），除非用户明确说"全部"或"作废"
 
 **订单状态映射：**
 - "正常" -> order_status=1
@@ -64,10 +78,11 @@ CUBE_SCHEMA_PROMPT = """
 }
 
 ## 规则：
-1. 如果用户查询涉及"利润"，必须生成两个过滤的子查询：销售金额(order_type=2) 和 采购金额(order_type=1)
-2. 如果用户查询涉及"增长率/同比/环比"，需要识别时间范围并设置 time_range
-3. 如果无法确定某些字段，使用合理的默认值
-4. metrics 和 dimensions 至少有一个不为空
+1. 如果用户查询"利润"或"成本"，直接返回对应的 metric（profit / cost），不要额外添加 order_type 过滤
+2. 默认所有查询都加上 order_status=1，除非用户明确说"全部订单"或"作废订单"
+3. 如果用户查询涉及"增长率/同比/环比"，需要识别时间范围并设置 time_range
+4. 如果无法确定某些字段，使用合理的默认值
+5. metrics 和 dimensions 至少有一个不为空
 """
 
 
@@ -94,7 +109,7 @@ class LLMParser:
             )
 
     async def _call_llm(self, query: str) -> dict:
-        """调用本地 LLM 服务"""
+        """调用 LLM 服务"""
         messages = [
             {
                 "role": "system",
@@ -113,10 +128,17 @@ class LLMParser:
             "max_tokens": 1000,
         }
 
+        headers = {"Content-Type": "application/json"}
+        if LLM_API_KEY:
+            headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
+        print(f"[LLM CALL] URL={self.api_url} model={self.model}")
+        print(f"[LLM CALL] query={query}")
+
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 self.api_url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json=payload,
             )
             response.raise_for_status()

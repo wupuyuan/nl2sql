@@ -1,2 +1,9 @@
 semantic-layer/__pycache__/
 *.log
+agent-service/__pycache__/
+mcp-hub/tools/__pycache__/
+semantic-layer/cube/__pycache__/
+metrics-engine/__pycache__/
+mcp-hub/__pycache__/
+webUI/.chainlit/
+webUI/__pycache__/

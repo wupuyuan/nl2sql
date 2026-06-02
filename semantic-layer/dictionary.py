@@ -12,6 +12,9 @@ SEMANTIC_DICT = {
     "订单类型": "order_type",
     "订单号": "order_id",
     "订单名称": "order_name",
+    "名称": "order_name",
+    "订单明细": "order_detail",
+    "明细": "order_detail",
 
     # 时间字段
     "创建时间": "create_time",
@@ -54,5 +57,9 @@ METRIC_DICT = {
 
     # 可扩展指标（以后用）
     "平均金额": "avg_amount",
-    "最大金额": "max_amount"
+    "最大金额": "max_amount",
+
+    # 利润/成本
+    "成本": "cost",
+    "利润": "profit",
 }

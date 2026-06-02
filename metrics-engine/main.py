@@ -43,7 +43,9 @@ class QueryDSL(BaseModel):
 
 METRIC_DEFS = {
     "amount": "SUM(amount)",
-    "order_cnt": "COUNT(*)"
+    "order_cnt": "COUNT(*)",
+    "cost": "SUM(CASE WHEN order_type = 1 THEN amount ELSE 0 END)",
+    "profit": "SUM(CASE WHEN order_type = 2 THEN amount ELSE 0 END) - SUM(CASE WHEN order_type = 1 THEN amount ELSE 0 END)",
 }
 
 
@@ -92,6 +94,11 @@ def execute(dsl: QueryDSL):
     # -------------------------
 
     where_parts = []
+
+    # 默认过滤有效订单（除非 DSL 已指定 order_status）
+    has_status_filter = any(f.field == "order_status" for f in dsl.filters)
+    if not has_status_filter:
+        where_parts.append("order_status = 1")
 
     for f in dsl.filters:
 

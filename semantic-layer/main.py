@@ -10,8 +10,8 @@ app = FastAPI(
     description="NL2SQL Semantic Layer with Cube support",
 )
 
-# LLM 解析开关（可通过环境变量启用）
-ENABLE_LLM_PARSER = os.getenv("ENABLE_LLM_PARSER", "false").lower() == "true"
+# LLM 解析开关（默认启用，可通过环境变量禁用）
+ENABLE_LLM_PARSER = os.getenv("ENABLE_LLM_PARSER", "true").lower() == "true"
 
 
 @app.post("/semantic/parse")

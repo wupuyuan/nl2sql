@@ -1,0 +1,6 @@
+{
+    "base_url": "https://api.deepseek.com",
+    "api_url": null,
+    "model": "deepseek-v4-flash",
+    "api_key": "sk-123"
+}

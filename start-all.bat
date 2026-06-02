@@ -34,5 +34,5 @@ echo   semantic-layer: http://127.0.0.1:8001
 echo   metrics-engine: http://127.0.0.1:8002
 echo   mcp-hub:        http://127.0.0.1:8000
 echo   agent-service:  http://127.0.0.1:8003
-echo   webUI:          http://127.0.0.1:8080
+echo   webUI:          http://127.0.0.1:3100
 echo.

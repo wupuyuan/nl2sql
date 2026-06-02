@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 from typing import Any, List, Optional
 
 import httpx
@@ -7,16 +9,40 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
+_CONFIG_PATH = Path(__file__).with_name("config.json")
+
+
+def _load_config() -> dict:
+    if _CONFIG_PATH.exists():
+        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+_config = _load_config()
+
 MCP_HUB_URL = os.getenv("MCP_HUB_URL", "http://127.0.0.1:8000")
-LOCAL_LLM_BASE_URL = os.getenv(
-    "LOCAL_LLM_BASE_URL",
-    "http://localhost:1234",
+LLM_BASE_URL = os.getenv(
+    "LLM_BASE_URL",
+    _config.get("base_url", "http://localhost:1234"),
 )
-LOCAL_LLM_API_URL = os.getenv(
-    "LOCAL_LLM_API_URL",
-    f"{LOCAL_LLM_BASE_URL}/api/v1/chat",
+LLM_MODEL = os.getenv(
+    "LLM_MODEL",
+    _config.get("model", "qwen/qwen3.6-35b-a3b"),
 )
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen/qwen3.6-35b-a3b")
+LLM_API_KEY = os.getenv(
+    "LLM_API_KEY",
+    _config.get("api_key") or "",
+)
+
+_api_url = _config.get("api_url")
+if _api_url:
+    LLM_API_URL = os.getenv("LLM_API_URL", _api_url)
+elif "/v1/chat/completions" in LLM_BASE_URL:
+    LLM_API_URL = os.getenv("LLM_API_URL", LLM_BASE_URL)
+else:
+    LLM_API_URL = os.getenv("LLM_API_URL", f"{LLM_BASE_URL}/v1/chat/completions")
+
+LLM_PROVIDER = "openai" if "/v1/chat/completions" in LLM_API_URL else "local"
 
 
 app = FastAPI(
@@ -166,11 +192,11 @@ def extract_local_llm_content(data: Any) -> str:
 
 def extract_local_llm_model(data: Any) -> str:
     if not isinstance(data, dict):
-        return LOCAL_LLM_MODEL
+        return LLM_MODEL
     model = data.get("model") or data.get("model_instance_id")
     if isinstance(model, str) and model.strip():
         return model.strip()
-    return LOCAL_LLM_MODEL
+    return LLM_MODEL
 
 
 def extract_local_llm_usage(data: Any) -> Optional[dict[str, Any]]:
@@ -194,28 +220,44 @@ def extract_local_llm_usage(data: Any) -> Optional[dict[str, Any]]:
     }
 
 
-async def call_local_llm(
+async def call_llm(
     query: str,
     mcp_result: dict,
     history: Optional[List[ChatMessage]] = None,
     temperature: float = 0.2,
 ) -> dict:
-    payload = {
-        "model": LOCAL_LLM_MODEL,
-        "system_prompt": build_system_prompt(),
-        "input": build_user_prompt(query, mcp_result, history),
-    }
+    system_prompt = build_system_prompt()
+    user_prompt = build_user_prompt(query, mcp_result, history)
+
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
+    if LLM_PROVIDER == "openai":
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+        }
+    else:
+        payload = {
+            "model": LLM_MODEL,
+            "system_prompt": system_prompt,
+            "input": user_prompt,
+        }
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
-            LOCAL_LLM_API_URL,
-            headers={"Content-Type": "application/json"},
+            LLM_API_URL,
+            headers=headers,
             json=payload,
         )
         response.raise_for_status()
         data = response.json()
 
-    _ = temperature
     content = extract_local_llm_content(data)
     model = extract_local_llm_model(data)
     usage = extract_local_llm_usage(data)
@@ -268,7 +310,7 @@ async def run_agent(
 
     if with_llm and mcp_result.get("status") == "success":
         try:
-            llm_result = await call_local_llm(
+            llm_result = await call_llm(
                 query=query,
                 mcp_result=mcp_result,
                 history=history,
@@ -290,8 +332,8 @@ async def run_agent(
         "data": mcp_result.get("data"),
         "llm": {
             "enabled": bool(with_llm),
-            "provider": "local",
-            "model": (llm_result or {}).get("model", LOCAL_LLM_MODEL if with_llm else None),
+            "provider": LLM_PROVIDER,
+            "model": (llm_result or {}).get("model", LLM_MODEL if with_llm else None),
             "usage": (llm_result or {}).get("usage"),
         },
     }
@@ -309,10 +351,12 @@ async def root():
 async def health():
     return {
         "status": "ok",
+        "config_file": str(_CONFIG_PATH),
+        "config_loaded": _CONFIG_PATH.exists(),
         "mcp_hub_url": MCP_HUB_URL,
-        "llm_api_url": LOCAL_LLM_API_URL,
-        "llm_model": LOCAL_LLM_MODEL,
-        "llm_provider": "local",
+        "llm_provider": LLM_PROVIDER,
+        "llm_api_url": LLM_API_URL,
+        "llm_model": LLM_MODEL,
     }
 
 
