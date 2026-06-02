@@ -8,17 +8,20 @@ from pydantic import BaseModel, Field
 
 
 MCP_HUB_URL = os.getenv("MCP_HUB_URL", "http://127.0.0.1:8000")
-DEEPSEEK_API_URL = os.getenv(
-    "DEEPSEEK_API_URL",
-    "https://api.deepseek.com/chat/completions",
+LOCAL_LLM_BASE_URL = os.getenv(
+    "LOCAL_LLM_BASE_URL",
+    "http://localhost:1234",
 )
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+LOCAL_LLM_API_URL = os.getenv(
+    "LOCAL_LLM_API_URL",
+    f"{LOCAL_LLM_BASE_URL}/api/v1/chat",
+)
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen/qwen3.6-35b-a3b")
 
 
 app = FastAPI(
     title="Agent Service",
-    description="DeepSeek + MCP Hub orchestration service",
+    description="Local LLM + MCP Hub orchestration service",
     version="0.1.0",
 )
 
@@ -38,14 +41,14 @@ class ChatMessage(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户自然语言查询")
-    with_llm: bool = Field(True, description="是否调用 DeepSeek 生成自然语言答案")
+    with_llm: bool = Field(True, description="是否调用本地模型生成自然语言答案")
     temperature: float = Field(0.2, ge=0.0, le=2.0)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="当前用户消息")
     history: List[ChatMessage] = Field(default_factory=list, description="历史对话")
-    with_llm: bool = Field(True, description="是否调用 DeepSeek 生成自然语言答案")
+    with_llm: bool = Field(True, description="是否调用本地模型生成自然语言答案")
     temperature: float = Field(0.2, ge=0.0, le=2.0)
 
 
@@ -69,8 +72,30 @@ def build_system_prompt() -> str:
     )
 
 
-def build_user_prompt(query: str, mcp_result: dict) -> str:
-    return (
+def build_user_prompt(
+    query: str,
+    mcp_result: dict,
+    history: Optional[List[ChatMessage]] = None,
+) -> str:
+    prompt_parts: List[str] = []
+
+    history_lines: List[str] = []
+    for item in history or []:
+        if item.role not in {"system", "user", "assistant"}:
+            continue
+        if not item.content.strip():
+            continue
+        role_map = {
+            "system": "系统",
+            "user": "用户",
+            "assistant": "助手",
+        }
+        history_lines.append(f"{role_map.get(item.role, item.role)}：{item.content}")
+
+    if history_lines:
+        prompt_parts.append("历史对话：\n" + "\n".join(history_lines))
+
+    prompt_parts.append(
         "用户问题：\n"
         f"{query}\n\n"
         "系统查询结果：\n"
@@ -78,61 +103,127 @@ def build_user_prompt(query: str, mcp_result: dict) -> str:
         "请基于以上结果给出最终回答。"
     )
 
+    return "\n\n".join(prompt_parts)
 
-async def call_deepseek(
+
+def extract_local_llm_content(data: Any) -> str:
+    if isinstance(data, str):
+        return data.strip()
+
+    if not isinstance(data, dict):
+        raise RuntimeError("本地模型返回格式不支持")
+
+    direct_fields = [
+        data.get("output"),
+        data.get("text"),
+        data.get("response"),
+        data.get("answer"),
+        data.get("content"),
+    ]
+    for value in direct_fields:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "message":
+                content = item.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+
+    message = data.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    if isinstance(message, dict):
+        for key in ("content", "text"):
+            value = message.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    choices = data.get("choices") or []
+    if choices and isinstance(choices[0], dict):
+        first_choice = choices[0]
+        first_message = first_choice.get("message") or {}
+        if isinstance(first_message, dict):
+            content = first_message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+        text = first_choice.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+    raise RuntimeError("本地模型未返回有效内容")
+
+
+def extract_local_llm_model(data: Any) -> str:
+    if not isinstance(data, dict):
+        return LOCAL_LLM_MODEL
+    model = data.get("model") or data.get("model_instance_id")
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    return LOCAL_LLM_MODEL
+
+
+def extract_local_llm_usage(data: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return None
+
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        return usage
+
+    stats = data.get("stats")
+    if not isinstance(stats, dict):
+        return None
+
+    return {
+        "prompt_tokens": stats.get("input_tokens"),
+        "completion_tokens": stats.get("total_output_tokens"),
+        "reasoning_tokens": stats.get("reasoning_output_tokens"),
+        "tokens_per_second": stats.get("tokens_per_second"),
+        "time_to_first_token_seconds": stats.get("time_to_first_token_seconds"),
+    }
+
+
+async def call_local_llm(
     query: str,
     mcp_result: dict,
     history: Optional[List[ChatMessage]] = None,
     temperature: float = 0.2,
 ) -> dict:
-    if not DEEPSEEK_API_KEY:
-        raise RuntimeError("DEEPSEEK_API_KEY 未配置")
-
-    messages: List[dict[str, str]] = [{"role": "system", "content": build_system_prompt()}]
-
-    for item in history or []:
-        if item.role not in {"system", "user", "assistant"}:
-            continue
-        messages.append({"role": item.role, "content": item.content})
-
-    messages.append(
-        {
-            "role": "user",
-            "content": build_user_prompt(query, mcp_result),
-        }
-    )
-
     payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": messages,
-        "temperature": temperature,
+        "model": LOCAL_LLM_MODEL,
+        "system_prompt": build_system_prompt(),
+        "input": build_user_prompt(query, mcp_result, history),
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
-            DEEPSEEK_API_URL,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            LOCAL_LLM_API_URL,
+            headers={"Content-Type": "application/json"},
             json=payload,
         )
         response.raise_for_status()
         data = response.json()
 
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError("DeepSeek 返回结果为空")
-
-    message = choices[0].get("message") or {}
-    content = message.get("content", "").strip()
-    if not content:
-        raise RuntimeError("DeepSeek 未返回有效内容")
+    _ = temperature
+    content = extract_local_llm_content(data)
+    model = extract_local_llm_model(data)
+    usage = extract_local_llm_usage(data)
 
     return {
         "answer": content,
-        "model": data.get("model", DEEPSEEK_MODEL),
-        "usage": data.get("usage"),
+        "model": model,
+        "usage": usage,
         "raw": data,
     }
 
@@ -177,7 +268,7 @@ async def run_agent(
 
     if with_llm and mcp_result.get("status") == "success":
         try:
-            llm_result = await call_deepseek(
+            llm_result = await call_local_llm(
                 query=query,
                 mcp_result=mcp_result,
                 history=history,
@@ -199,8 +290,8 @@ async def run_agent(
         "data": mcp_result.get("data"),
         "llm": {
             "enabled": bool(with_llm),
-            "provider": "deepseek",
-            "model": (llm_result or {}).get("model", DEEPSEEK_MODEL if with_llm else None),
+            "provider": "local",
+            "model": (llm_result or {}).get("model", LOCAL_LLM_MODEL if with_llm else None),
             "usage": (llm_result or {}).get("usage"),
         },
     }
@@ -219,8 +310,9 @@ async def health():
     return {
         "status": "ok",
         "mcp_hub_url": MCP_HUB_URL,
-        "deepseek_model": DEEPSEEK_MODEL,
-        "deepseek_enabled": bool(DEEPSEEK_API_KEY),
+        "llm_api_url": LOCAL_LLM_API_URL,
+        "llm_model": LOCAL_LLM_MODEL,
+        "llm_provider": "local",
     }
 
 

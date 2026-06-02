@@ -2,96 +2,943 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自然语言转 SQL 平台</title>
     <style>
-        * {
-            box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        :root {
+            --bg: #f3f4f6;
+            --sidebar-bg: #1f2937;
+            --sidebar-hover: #374151;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --text: #111827;
+            --text-secondary: #6b7280;
+            --border: #e5e7eb;
+            --card-bg: #ffffff;
+            --code-bg: #1e293b;
+            --danger: #ef4444;
+            --success: #10b981;
         }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            background: #f6f8fa;
-            margin: 0;
-            padding: 30px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
         }
-        .container {
-            max-width: 960px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--sidebar-bg);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
         }
-        h2 {
-            margin-top: 0;
-            color: #24292f;
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--sidebar-hover);
         }
-        .query-input {
-            width: 100%;
-            padding: 14px 16px;
-            font-size: 16px;
-            border: 1px solid #d1d9e0;
-            border-radius: 8px;
-            margin-bottom: 12px;
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-        .query-btn {
-            padding: 14px 24px;
-            background: #0071e3;
-            color: white;
+
+        .new-chat-btn {
+            width: calc(100% - 40px);
+            margin: 16px 20px;
+            padding: 10px;
+            background: var(--accent);
+            color: #fff;
             border: none;
             border-radius: 8px;
-            font-size: 15px;
             cursor: pointer;
-        }
-        .query-btn:hover {
-            background: #0077ed;
-        }
-        .result-box {
-            margin-top: 24px;
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            min-height: 220px;
-            white-space: pre-wrap;
-            font-family: monospace;
             font-size: 14px;
-            line-height: 1.6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: background 0.2s;
         }
+
+        .new-chat-btn:hover { background: var(--accent-hover); }
+
+        .mode-section {
+            padding: 0 20px 12px;
+        }
+
+        .mode-label {
+            font-size: 12px;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .mode-btn {
+            width: 100%;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            background: transparent;
+            color: #d1d5db;
+            border: 1px solid var(--sidebar-hover);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: var(--sidebar-hover);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .mode-btn:hover:not(.active) {
+            background: var(--sidebar-hover);
+        }
+
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 12px 12px;
+        }
+
+        .history-item {
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #d1d5db;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 4px;
+        }
+
+        .history-item:hover, .history-item.active {
+            background: var(--sidebar-hover);
+            color: #fff;
+        }
+
+        .history-item .delete-btn {
+            margin-left: auto;
+            opacity: 0;
+            background: none;
+            border: none;
+            color: #9ca3af;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .history-item:hover .delete-btn {
+            opacity: 1;
+        }
+
+        .delete-btn:hover { color: var(--danger); }
+
+        /* Main */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* Top Bar */
+        .top-bar {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .top-bar label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .top-bar input, .top-bar select {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+        }
+
+        .top-bar input:focus, .top-bar select:focus {
+            border-color: var(--accent);
+        }
+
+        .config-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .spacer { flex: 1; }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.ok {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-badge.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .welcome {
+            text-align: center;
+            margin-top: 60px;
+            color: var(--text-secondary);
+        }
+
+        .welcome h2 {
+            font-size: 28px;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .welcome p {
+            font-size: 16px;
+            margin-bottom: 32px;
+        }
+
+        .example-cards {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .example-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text);
+            transition: all 0.2s;
+            min-width: 180px;
+        }
+
+        .example-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+        }
+
+        /* Messages */
+        .message {
+            display: flex;
+            gap: 12px;
+            max-width: 900px;
+            width: 100%;
+            align-self: center;
+        }
+
+        .message.user { flex-direction: row-reverse; }
+
+        .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .avatar.user {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .avatar.assistant {
+            background: #10b981;
+            color: #fff;
+        }
+
+        .bubble {
+            padding: 14px 18px;
+            border-radius: 14px;
+            font-size: 14px;
+            line-height: 1.7;
+            max-width: 720px;
+        }
+
+        .message.user .bubble {
+            background: var(--accent);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .bubble {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.assistant .bubble.error {
+            border-color: #fecaca;
+            background: #fef2f2;
+        }
+
+        /* Detail Panel inside assistant bubble */
+        .detail-panel {
+            margin-top: 12px;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+        }
+
+        .detail-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .detail-toggle:hover { color: var(--accent); }
+
+        .detail-content {
+            margin-top: 10px;
+            display: none;
+        }
+
+        .detail-content.open { display: block; }
+
+        .detail-section {
+            margin-bottom: 12px;
+        }
+
+        .detail-section h4 {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        pre.code-block {
+            background: var(--code-bg);
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .data-table th, .data-table td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .data-table th {
+            background: #f9fafb;
+            font-weight: 600;
+        }
+
+        .data-table tr:nth-child(even) {
+            background: #f9fafb;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 16px 24px 24px;
+            background: var(--card-bg);
+            border-top: 1px solid var(--border);
+        }
+
+        .input-box {
+            display: flex;
+            gap: 12px;
+            max-width: 900px;
+            margin: 0 auto;
+            align-items: flex-end;
+        }
+
+        .input-box textarea {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            min-height: 48px;
+            max-height: 160px;
+            font-family: inherit;
+        }
+
+        .input-box textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .send-btn {
+            padding: 12px 20px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.2s;
+            height: 48px;
+        }
+
+        .send-btn:hover { background: var(--accent-hover); }
+        .send-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .input-hint {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        /* Loading */
+        .loading-dots {
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .loading-dots span {
+            width: 6px;
+            height: 6px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .loading-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .loading-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>🤖 AI 自然语言转 SQL</h2>
-        <input 
-            type="text" 
-            class="query-input" 
-            id="queryText" 
-            placeholder="请输入查询指令，例如：查询总销售额、查询所有销售记录、按产品统计销售额">
-        <button class="query-btn" onclick="executeQuery()">执行查询</button>
-        <div id="resultArea" class="result-box">等待查询...</div>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>🤖 NL2SQL</h1>
+        </div>
+        <button class="new-chat-btn" onclick="newChat()">
+            <span>+</span> 新建会话
+        </button>
+        <div class="mode-section">
+            <div class="mode-label">工作模式</div>
+            <button class="mode-btn active" id="mode-chat" onclick="setMode('chat')">
+                💬 AI 对话
+            </button>
+            <button class="mode-btn" id="mode-sql" onclick="setMode('sql')">
+                ⚡ SQL 生成
+            </button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+    </div>
+
+    <div class="main">
+        <div class="top-bar">
+            <div class="config-group">
+                <label>语义层:</label>
+                <input type="text" id="semanticUrl" value="http://127.0.0.1:8000" style="width: 170px;">
+            </div>
+            <div class="config-group">
+                <label>Agent:</label>
+                <input type="text" id="agentUrl" value="http://127.0.0.1:8003" style="width: 170px;">
+            </div>
+            <div class="config-group" id="parseMethodGroup" style="display:none;">
+                <label>解析方式:</label>
+                <select id="parseMethod">
+                    <option value="rule">规则引擎</option>
+                    <option value="llm">LLM 解析</option>
+                    <option value="hybrid">混合解析</option>
+                </select>
+            </div>
+            <div class="config-group" id="tempGroup">
+                <label>温度:</label>
+                <input type="number" id="temperature" value="0.2" min="0" max="2" step="0.1" style="width: 60px;">
+            </div>
+            <div class="spacer"></div>
+            <span class="status-badge ok" id="statusBadge">就绪</span>
+        </div>
+
+        <div class="chat-area" id="chatArea">
+            <div class="welcome" id="welcome">
+                <h2>AI 自然语言转 SQL</h2>
+                <p>输入你的业务问题，AI 会自动解析语义、生成 SQL 并给出分析结论</p>
+                <div class="example-cards">
+                    <div class="example-card" onclick="setQuery('查询总销售额')">
+                        <div>📊 查询总销售额</div>
+                    </div>
+                    <div class="example-card" onclick="setQuery('按产品统计销售额')">
+                        <div>📈 按产品统计销售额</div>
+                    </div>
+                    <div class="example-card" onclick="setQuery('本月采购订单数')">
+                        <div>📅 本月采购订单数</div>
+                    </div>
+                    <div class="example-card" onclick="setQuery('查询利润')">
+                        <div>💰 查询利润</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-box">
+                <textarea
+                    id="queryInput"
+                    rows="1"
+                    placeholder="输入查询指令，例如：查询总销售额..."
+                    onkeydown="handleKeydown(event)"
+                    oninput="autoResize(this)"></textarea>
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                    <span>➤</span> 发送
+                </button>
+            </div>
+            <div class="input-hint">按 Enter 发送，Shift+Enter 换行</div>
+        </div>
     </div>
 
     <script>
-        // 后端接口地址（后续你部署好NL2SQL后，我帮你改成真实地址）
-        const API_BASE = "";
+        // ========================
+        // State
+        // ========================
+        let mode = 'chat';
+        let currentSessionId = null;
+        let sessions = JSON.parse(localStorage.getItem('nl2sql_sessions') || '[]');
+        let isLoading = false;
 
-        async function executeQuery() {
-            const query = document.getElementById("queryText").value.trim();
-            const resultArea = document.getElementById("resultArea");
+        // ========================
+        // Init
+        // ========================
+        renderHistory();
+        loadSession(getOrCreateSession());
 
-            if (!query) {
-                resultArea.innerText = "请输入查询内容";
+        // ========================
+        // Mode
+        // ========================
+        function setMode(newMode) {
+            mode = newMode;
+            document.getElementById('mode-chat').classList.toggle('active', mode === 'chat');
+            document.getElementById('mode-sql').classList.toggle('active', mode === 'sql');
+            document.getElementById('parseMethodGroup').style.display = mode === 'sql' ? 'flex' : 'none';
+            document.getElementById('tempGroup').style.display = mode === 'chat' ? 'flex' : 'none';
+            newChat();
+        }
+
+        // ========================
+        // Session Management
+        // ========================
+        function getOrCreateSession() {
+            if (!currentSessionId || !sessions.find(s => s.id === currentSessionId)) {
+                const session = {
+                    id: Date.now().toString(),
+                    title: '新会话',
+                    mode: mode,
+                    messages: [],
+                    createdAt: Date.now()
+                };
+                sessions.unshift(session);
+                currentSessionId = session.id;
+                saveSessions();
+            }
+            return currentSessionId;
+        }
+
+        function newChat() {
+            currentSessionId = null;
+            getOrCreateSession();
+            loadSession(currentSessionId);
+            renderHistory();
+        }
+
+        function loadSession(id) {
+            currentSessionId = id;
+            const session = sessions.find(s => s.id === id);
+            const chatArea = document.getElementById('chatArea');
+            chatArea.innerHTML = '';
+
+            if (!session || session.messages.length === 0) {
+                chatArea.innerHTML = `
+                    <div class="welcome">
+                        <h2>AI 自然语言转 SQL</h2>
+                        <p>${mode === 'chat' ? '输入你的业务问题，AI 会自动解析语义、生成 SQL 并给出分析结论' : '输入查询指令，快速获取语义解析和生成的 SQL'}</p>
+                        <div class="example-cards">
+                            <div class="example-card" onclick="setQuery('查询总销售额')"><div>📊 查询总销售额</div></div>
+                            <div class="example-card" onclick="setQuery('按产品统计销售额')"><div>📈 按产品统计销售额</div></div>
+                            <div class="example-card" onclick="setQuery('本月采购订单数')"><div>📅 本月采购订单数</div></div>
+                            <div class="example-card" onclick="setQuery('查询利润')"><div>💰 查询利润</div></div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                session.messages.forEach(msg => {
+                    appendMessage(msg.role, msg.content, msg.details, false);
+                });
+            }
+            renderHistory();
+        }
+
+        function saveSessions() {
+            localStorage.setItem('nl2sql_sessions', JSON.stringify(sessions));
+        }
+
+        function renderHistory() {
+            const list = document.getElementById('historyList');
+            list.innerHTML = '';
+            sessions.forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'history-item' + (s.id === currentSessionId ? ' active' : '');
+                div.innerHTML = `
+                    <span>${s.mode === 'chat' ? '💬' : '⚡'}</span>
+                    <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(s.title)}</span>
+                    <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')">✕</button>
+                `;
+                div.onclick = () => {
+                    setMode(s.mode);
+                    loadSession(s.id);
+                };
+                list.appendChild(div);
+            });
+        }
+
+        function deleteSession(id) {
+            sessions = sessions.filter(s => s.id !== id);
+            if (currentSessionId === id) {
+                currentSessionId = sessions.length > 0 ? sessions[0].id : null;
+                loadSession(currentSessionId);
+            }
+            saveSessions();
+            renderHistory();
+        }
+
+        function updateSessionTitle(text) {
+            const session = sessions.find(s => s.id === currentSessionId);
+            if (session && session.title === '新会话') {
+                session.title = text.slice(0, 20) || '新会话';
+                saveSessions();
+                renderHistory();
+            }
+        }
+
+        // ========================
+        // UI Helpers
+        // ========================
+        function setQuery(text) {
+            document.getElementById('queryInput').value = text;
+            autoResize(document.getElementById('queryInput'));
+            document.getElementById('queryInput').focus();
+        }
+
+        function autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+        }
+
+        function handleKeydown(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function setStatus(text, isError) {
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = text;
+            badge.className = 'status-badge ' + (isError ? 'error' : 'ok');
+        }
+
+        // ========================
+        // Messages
+        // ========================
+        function appendMessage(role, content, details, save) {
+            const chatArea = document.getElementById('chatArea');
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.remove();
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message ' + role;
+
+            let detailsHtml = '';
+            if (details && role === 'assistant') {
+                const hasDetails = details.semantic || details.sql || (details.data && details.data.length);
+                if (hasDetails) {
+                    const semanticJson = details.semantic ? JSON.stringify(details.semantic, null, 2) : '';
+                    const dataHtml = buildDataTable(details.data);
+                    detailsHtml = `
+                        <div class="detail-panel">
+                            <div class="detail-toggle" onclick="this.nextElementSibling.classList.toggle('open')">
+                                <span>▶</span> 查看技术详情（语义解析 / SQL / 数据）
+                            </div>
+                            <div class="detail-content">
+                                ${semanticJson ? `<div class="detail-section"><h4>语义解析</h4><pre class="code-block">${escapeHtml(semanticJson)}</pre></div>` : ''}
+                                ${details.sql ? `<div class="detail-section"><h4>生成 SQL</h4><pre class="code-block">${escapeHtml(details.sql)}</pre></div>` : ''}
+                                ${dataHtml ? `<div class="detail-section"><h4>查询数据</h4>${dataHtml}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            msgDiv.innerHTML = `
+                <div class="avatar ${role}">${role === 'user' ? '你' : 'AI'}</div>
+                <div class="bubble ${details && details.error ? 'error' : ''}">
+                    ${escapeHtml(content)}
+                    ${detailsHtml}
+                </div>
+            `;
+
+            chatArea.appendChild(msgDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            if (save) {
+                const session = sessions.find(s => s.id === currentSessionId);
+                if (session) {
+                    session.messages.push({ role, content, details });
+                    session.mode = mode;
+                    saveSessions();
+                }
+            }
+
+            return msgDiv;
+        }
+
+        function buildDataTable(rows) {
+            if (!rows || rows.length === 0) return '';
+            const keys = Object.keys(rows[0]);
+            const headers = keys.map(k => `<th>${escapeHtml(k)}</th>`).join('');
+            const body = rows.map(row =>
+                `<tr>${keys.map(k => `<td>${escapeHtml(String(row[k] ?? ''))}</td>`).join('')}</tr>`
+            ).join('');
+            return `<table class="data-table"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table>`;
+        }
+
+        function updateLastMessage(content, details) {
+            const session = sessions.find(s => s.id === currentSessionId);
+            if (session && session.messages.length > 0) {
+                const last = session.messages[session.messages.length - 1];
+                if (last.role === 'assistant') {
+                    last.content = content;
+                    last.details = details;
+                    saveSessions();
+                }
+            }
+            // Re-render last bubble
+            const chatArea = document.getElementById('chatArea');
+            const bubbles = chatArea.querySelectorAll('.message.assistant .bubble');
+            if (bubbles.length > 0) {
+                const lastBubble = bubbles[bubbles.length - 1];
+                const hasDetails = details && (details.semantic || details.sql || (details.data && details.data.length));
+                let detailsHtml = '';
+                if (hasDetails) {
+                    const semanticJson = details.semantic ? JSON.stringify(details.semantic, null, 2) : '';
+                    const dataHtml = buildDataTable(details.data);
+                    detailsHtml = `
+                        <div class="detail-panel">
+                            <div class="detail-toggle" onclick="this.nextElementSibling.classList.toggle('open')">
+                                <span>▶</span> 查看技术详情（语义解析 / SQL / 数据）
+                            </div>
+                            <div class="detail-content">
+                                ${semanticJson ? `<div class="detail-section"><h4>语义解析</h4><pre class="code-block">${escapeHtml(semanticJson)}</pre></div>` : ''}
+                                ${details.sql ? `<div class="detail-section"><h4>生成 SQL</h4><pre class="code-block">${escapeHtml(details.sql)}</pre></div>` : ''}
+                                ${dataHtml ? `<div class="detail-section"><h4>查询数据</h4>${dataHtml}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+                lastBubble.innerHTML = escapeHtml(content) + detailsHtml;
+                lastBubble.className = 'bubble ' + (details && details.error ? 'error' : '');
+            }
+        }
+
+        // ========================
+        // API Calls
+        // ========================
+        async function sendMessage() {
+            if (isLoading) return;
+            const input = document.getElementById('queryInput');
+            const query = input.value.trim();
+            if (!query) return;
+
+            input.value = '';
+            input.style.height = 'auto';
+            isLoading = true;
+            setStatus('处理中...');
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('sendBtn').innerHTML = '<span class="loading-dots"><span></span><span></span><span></span></span>';
+
+            getOrCreateSession();
+            updateSessionTitle(query);
+            appendMessage('user', query, null, true);
+
+            // Placeholder assistant message
+            appendMessage('assistant', '思考中...', null, true);
+
+            try {
+                if (mode === 'chat') {
+                    await callAgent(query);
+                } else {
+                    await callSemantic(query);
+                }
+            } catch (err) {
+                updateLastMessage(`请求失败：${err.message}`, { error: true });
+                setStatus('错误', true);
+            } finally {
+                isLoading = false;
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('sendBtn').innerHTML = '<span>➤</span> 发送';
+            }
+        }
+
+        async function callAgent(query) {
+            const agentUrl = document.getElementById('agentUrl').value.trim();
+            const temperature = parseFloat(document.getElementById('temperature').value) || 0.2;
+            const session = sessions.find(s => s.id === currentSessionId);
+            const history = session ? session.messages
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .slice(0, -2) // exclude current pair
+                .map(m => ({ role: m.role, content: m.content })) : [];
+
+            const resp = await fetch(`${agentUrl}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: query,
+                    history: history,
+                    with_llm: true,
+                    temperature: temperature
+                })
+            });
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+
+            const details = {
+                semantic: data.semantic,
+                sql: data.sql,
+                data: data.data,
+                llm: data.llm
+            };
+            updateLastMessage(data.answer || '无回答', details);
+            setStatus('就绪');
+        }
+
+        async function callSemantic(query) {
+            const semanticUrl = document.getElementById('semanticUrl').value.trim();
+            const parseMethod = document.getElementById('parseMethod').value;
+
+            let endpoint;
+            if (parseMethod === 'llm') endpoint = '/semantic/parse-llm';
+            else if (parseMethod === 'hybrid') endpoint = '/semantic/parse-hybrid';
+            else endpoint = '/semantic/parse';
+
+            const resp = await fetch(`${semanticUrl}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+            });
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+
+            if (data.error) {
+                updateLastMessage(`解析错误：${data.error}`, { error: true, ...data });
+                setStatus('错误', true);
                 return;
             }
 
-            resultArea.innerText = "正在处理中...";
+            const content = data.sql
+                ? `已生成 SQL，共识别 ${data.metrics?.length || 0} 个指标、${data.filters?.length || 0} 个过滤条件。`
+                : '语义解析完成，但未生成 SQL。';
 
-            try {
-                const response = await fetch(`${API_BASE}/nl2sql?query=${encodeURIComponent(query)}`);
-                const data = await response.json();
-                resultArea.innerText = JSON.stringify(data, null, 2);
-            } catch (err) {
-                resultArea.innerText = "请求失败：" + err.message;
-            }
+            updateLastMessage(content, {
+                semantic: {
+                    intent: data.intent,
+                    metrics: data.metrics,
+                    dimensions: data.dimensions,
+                    filters: data.filters,
+                    time_range: data.time_range,
+                    warnings: data.warnings,
+                    limit: data.limit
+                },
+                sql: data.sql,
+                data: data.data
+            });
+            setStatus('就绪');
         }
     </script>
 </body>

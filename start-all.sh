@@ -7,6 +7,7 @@ SERVICES=(
   "semantic-layer"
   "metrics-engine"
   "mcp-hub"
+  "webUI"
   "agent-service"
 )
 
