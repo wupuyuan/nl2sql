@@ -102,7 +102,11 @@ def execute(dsl: QueryDSL):
 
     for f in dsl.filters:
 
-        if isinstance(f.value, str):
+        if f.op == "in" and isinstance(f.value, list):
+            # 处理 IN 操作符
+            values = ", ".join([f"'{v}'" if isinstance(v, str) else str(v) for v in f.value])
+            where_parts.append(f"{f.field} IN ({values})")
+        elif isinstance(f.value, str):
             where_parts.append(
                 f"{f.field} {f.op} '{f.value}'"
             )

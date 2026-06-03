@@ -11,7 +11,11 @@
         ↓
 MCP Hub（网关，mcp-hub）
         ↓
+   Auth Module（认证鉴权）
+        ↓
 Semantic Layer（定义层，semantic-layer）
+        ↓
+ Policy Engine（策略引擎，RBAC + ABAC）
         ↓
 Metrics Engine（执行层，metrics-engine）
         ↓
@@ -23,7 +27,9 @@ DB（MySQL）
 - `Web` 提供简单的自然语言输入页面。
 - `Agent` 可以作为智能助手入口，调用 `MCP Hub` 的统一接口或工具接口。
 - `MCP Hub` 负责聚合调用语义解析和指标执行。
+- `Auth Module` 负责身份认证和 RBAC 权限检查，无效请求最早拦截。
 - `Semantic Layer` 负责把自然语言转换为语义 DSL。
+- `Policy Engine` 负责基于用户属性和语义结果做 ABAC 数据级权限过滤。
 - `Metrics Engine` 负责把 DSL 转为 SQL，并执行数据库查询。
 - `DB` 保存演示数据。
 
@@ -33,11 +39,27 @@ DB（MySQL）
 
 ```text
 ai-platform/
+├─ auth-service/
+│  ├─ main.py
+│  ├─ users.py
+│  ├─ external_auth.py
+│  ├─ schema.py
+│  ├─ start.sh
+│  └─ start.bat
+├─ policy-engine/
+│  ├─ main.py
+│  ├─ engine.py
+│  ├─ config.py
+│  ├─ schema.py
+│  ├─ start.sh
+│  └─ start.bat
 ├─ web/
 │  └─ index.html
 ├─ mcp-hub/
 │  ├─ main.py
 │  └─ tools/
+│     ├─ auth_tool.py
+│     ├─ policy_tool.py
 │     ├─ semantic_tool.py
 │     └─ metrics_tool.py
 ├─ semantic-layer/
@@ -49,7 +71,9 @@ ai-platform/
 │  └─ main.py
 └─ doc/
    ├─ create.sql
-   └─ project-overview.md
+   ├─ inport.sql
+   ├─ project-overview.md
+   └─ product-introduction.md
 ```
 
 ---
@@ -101,6 +125,7 @@ ai-platform/
 
 - 作为统一网关，对外暴露查询入口。
 - 接收自然语言请求。
+- 调用 `Auth Module` 完成身份认证和 RBAC 权限检查。
 - 先调用 `Semantic Layer` 完成语义解析。
 - 再调用 `Metrics Engine` 执行 DSL 并产出 SQL 和数据。
 - 把链路结果统一返回给调用方。
@@ -137,7 +162,51 @@ ai-platform/
 
 ---
 
-### 3.4 Semantic Layer
+### 3.4 Auth Module（认证鉴权）
+
+目录：`auth-service/`
+
+职责：
+
+- 身份认证：验证 Token 有效性，确认用户身份。
+- RBAC（基于角色的访问控制）：检查用户是否有权限执行查询操作。
+- ABAC（基于属性的访问控制）：根据用户属性（部门、区域、角色等）动态生成数据过滤条件。
+
+#### RBAC 模块
+
+控制"谁能做什么操作"：
+
+```python
+ROLES = {
+    "admin": ["query", "manage_users", "view_audit"],
+    "analyst": ["query", "view_audit"],
+    "viewer": ["query"],
+}
+```
+
+#### ABAC 模块
+
+控制"谁能看到什么数据"：
+
+```python
+POLICIES = {
+    "sales_data": {
+        "condition": "user.department == 'sales' OR user.role == 'admin'",
+        "data_filter": {"region": "user.allowed_regions"},
+    },
+}
+```
+
+#### 权限检查点
+
+| 阶段 | 权限类型 | 检查内容 | 拦截时机 |
+|------|---------|---------|---------|
+| **MCP Hub 入口** | 认证 + RBAC | 用户身份是否合法？是否有查询权限？ | 最早拦截，无效请求直接拒绝 |
+| **Semantic Layer 后** | ABAC | 用户能查哪些数据？需要追加什么过滤条件？ | 语义解析后，SQL 生成前 |
+
+---
+
+### 3.5 Semantic Layer
 
 目录：`semantic-layer/`
 
@@ -191,7 +260,7 @@ ai-platform/
 
 ---
 
-### 3.5 Metrics Engine
+### 3.6 Metrics Engine
 
 目录：`metrics-engine/`
 
@@ -237,7 +306,16 @@ METRIC_DEFS = {
 | `order_type` | `TINYINT` | `1=采购，2=销售` |
 | `amount` | `DECIMAL(12,2)` | 金额 |
 | `order_status` | `TINYINT` | `-1=作废，1=正常` |
+| `area` | `VARCHAR(50)` | 地区：`beijing`、`shanghai` |
 | `create_time` | `DATETIME` | 创建时间 |
+
+**测试用户与数据权限：**
+
+| 用户 | Token | 角色 | 可见区域 |
+|------|-------|------|---------|
+| `cipher_op` | `token_cipher_op` | admin | 北京 + 上海 |
+| `beijing` | `token_beijing` | viewer | 仅北京 |
+| `shanghai` | `token_shanghai` | viewer | 仅上海 |
 
 ---
 
@@ -247,12 +325,16 @@ METRIC_DEFS = {
 
 1. 用户在 `web/index.html` 输入自然语言。
 2. 页面调用 `MCP Hub` 的 `/nl2sql` 接口。
-3. `MCP Hub` 调用 `Semantic Layer` 的 `/semantic/parse`。
-4. `Semantic Layer` 输出 DSL。
-5. `MCP Hub` 再调用 `Metrics Engine` 的 `/execute`。
-6. `Metrics Engine` 生成 SQL，并执行查询。
-7. 结果返回给 `MCP Hub`。
-8. `MCP Hub` 把语义结果、SQL 和数据统一返回前端或 Agent。
+3. `MCP Hub` 调用 `Auth Module` 完成身份认证和 RBAC 权限检查。
+   - 如果认证失败或无权限，直接返回 403。
+4. `MCP Hub` 调用 `Semantic Layer` 的 `/semantic/parse`。
+5. `Semantic Layer` 输出 DSL。
+6. `MCP Hub` 调用 `Policy Engine` 完成 ABAC 数据级权限过滤。
+   - 根据用户属性（部门、区域等）动态追加过滤条件到 DSL。
+7. `MCP Hub` 再调用 `Metrics Engine` 的 `/execute`。
+8. `Metrics Engine` 生成 SQL，并执行查询。
+9. 结果返回给 `MCP Hub`。
+10. `MCP Hub` 把语义结果、SQL 和数据统一返回前端或 Agent。
 
 ### 5.2 工具化调用流程
 
@@ -266,6 +348,25 @@ METRIC_DEFS = {
 - 调试单独的语义解析能力
 - 将 `Semantic Layer` 与 `Metrics Engine` 解耦调用
 - 让 Agent 做更复杂的编排
+
+### 5.3 权限检查流程
+
+```
+用户请求 → MCP Hub
+              ↓
+         Auth Module 检查
+              ↓
+         ❌ 无权限 → 返回 403
+         ✅ 有权限 → 继续
+              ↓
+         Semantic Layer 解析
+              ↓
+         Policy Engine（ABAC）
+              ↓
+         根据用户属性追加数据过滤条件
+              ↓
+         Metrics Engine 执行
+```
 
 ---
 
@@ -374,6 +475,20 @@ SOURCE doc/create.sql;
 
 建议直接分别启动 3 个 FastAPI 服务。
 
+#### 启动 Auth Service
+
+```bash
+cd auth-service
+python -m uvicorn main:app --host 0.0.0.0 --port 8004
+```
+
+#### 启动 Policy Engine
+
+```bash
+cd policy-engine
+python -m uvicorn main:app --host 0.0.0.0 --port 8005
+```
+
 #### 启动 Semantic Layer
 
 ```bash
@@ -399,6 +514,8 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 - 前端页面：直接打开 `web/index.html`
 - 网关健康检查：`http://127.0.0.1:8000/health`
+- 认证服务：`http://127.0.0.1:8004`
+- 策略引擎：`http://127.0.0.1:8005`
 - 语义解析服务：`http://127.0.0.1:8001/semantic/parse`
 - 执行引擎服务：`http://127.0.0.1:8002/execute`
 
@@ -406,6 +523,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 - `web/index.html` 中的 `API_BASE` 当前为空字符串，默认请求同源地址。
 - 如果前端与后端分开部署，需要把 `API_BASE` 改成 `MCP Hub` 的实际地址。
+- MCP Hub `/nl2sql` 接口需要在请求头中携带 `X-Auth-Token`。
 
 ---
 
@@ -432,6 +550,8 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 - 支持语义字典配置化
 - 支持基于 Agent 的多轮问答与自动补全条件
 - 支持 SQL 安全控制与权限隔离
+- **权限管理**：RBAC 角色权限 + ABAC 属性权限，实现细粒度数据访问控制
+- **审计日志**：记录所有查询操作和权限决策，支持合规审计
 
 ---
 

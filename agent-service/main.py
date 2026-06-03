@@ -69,6 +69,7 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户自然语言查询")
     with_llm: bool = Field(True, description="是否调用本地模型生成自然语言答案")
     temperature: float = Field(0.2, ge=0.0, le=2.0)
+    token: str = Field("", description="认证 Token (X-Auth-Token)")
 
 
 class ChatRequest(BaseModel):
@@ -76,13 +77,18 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = Field(default_factory=list, description="历史对话")
     with_llm: bool = Field(True, description="是否调用本地模型生成自然语言答案")
     temperature: float = Field(0.2, ge=0.0, le=2.0)
+    token: str = Field("", description="认证 Token (X-Auth-Token)")
 
 
-async def call_mcp_hub(query: str) -> dict:
+async def call_mcp_hub(query: str, token: str = "") -> dict:
+    headers = {}
+    if token:
+        headers["X-Auth-Token"] = token
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(
             f"{MCP_HUB_URL}/nl2sql",
             params={"query": query},
+            headers=headers,
         )
         response.raise_for_status()
         return response.json()
@@ -302,8 +308,9 @@ async def run_agent(
     with_llm: bool,
     temperature: float,
     history: Optional[List[ChatMessage]] = None,
+    token: str = "",
 ) -> dict[str, Any]:
-    mcp_result = await call_mcp_hub(query)
+    mcp_result = await call_mcp_hub(query, token=token)
 
     llm_result: Optional[dict[str, Any]] = None
     answer = build_fallback_answer(query, mcp_result)
@@ -366,6 +373,7 @@ async def query_api(payload: QueryRequest):
         query=payload.query,
         with_llm=payload.with_llm,
         temperature=payload.temperature,
+        token=payload.token,
     )
 
 
@@ -376,6 +384,7 @@ async def chat_api(payload: ChatRequest):
         with_llm=payload.with_llm,
         temperature=payload.temperature,
         history=payload.history,
+        token=payload.token,
     )
     return {
         "message": payload.message,

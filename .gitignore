@@ -7,3 +7,7 @@ metrics-engine/__pycache__/
 mcp-hub/__pycache__/
 webUI/.chainlit/
 webUI/__pycache__/
+.chainlit/
+webUI/.files/
+auth-service/__pycache__/
+policy-engine/__pycache__/

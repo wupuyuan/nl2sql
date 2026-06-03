@@ -14,7 +14,6 @@ import chainlit as cl
 # ========================
 # Auth Config
 # ========================
-DEFAULT_TOKEN = os.getenv("CHAINLIT_TOKEN", "550e8400-e29b-41d4-a716-446655440000")
 MAX_AUTH_FAILURES = 3
 BAN_WINDOW_SECONDS = 3600
 
@@ -57,14 +56,40 @@ def _clear_ban(ip: str):
     _ip_failures.pop(ip, None)
 
 
+# 用户名 -> 密码映射
+USER_PASSWORDS = {
+    "cipher_op": "550e8400-e29b-41d4-a716-446655440000",
+    "beijing": "660e8400-e29b-41d4-a716-446655440001",
+    "shanghai": "770e8400-e29b-41d4-a716-446655440002",
+}
+
+# 用户名 -> Token 映射
+USER_TOKENS = {
+    "cipher_op": "token_cipher_op",
+    "beijing": "token_beijing",
+    "shanghai": "token_shanghai",
+}
+
+# 用户名 -> 角色映射
+USER_ROLES = {
+    "cipher_op": "admin",
+    "beijing": "viewer",
+    "shanghai": "viewer",
+}
+
+
 @cl.password_auth_callback
 async def auth_callback(username: str, password: str):
     ip = _get_client_ip()
     if _is_ip_banned(ip):
         return None
-    if username == "cipher_op" and password == DEFAULT_TOKEN:
+    expected_password = USER_PASSWORDS.get(username)
+    if expected_password and password == expected_password:
         _clear_ban(ip)
-        return cl.User(identifier="cipher_op", metadata={"role": "admin"})
+        return cl.User(
+            identifier=username,
+            metadata={"role": USER_ROLES.get(username, "viewer")},
+        )
     _record_failure(ip)
     if _is_ip_banned(ip):
         print(f"[SECURITY] IP {ip} banned after {MAX_AUTH_FAILURES} failed login attempts")
@@ -112,16 +137,19 @@ EXAMPLES = [
 # ========================
 # API Clients
 # ========================
-async def call_agent_chat(message: str, history: list, temperature: float = 0.2):
+async def call_agent_chat(message: str, history: list, temperature: float = 0.2, token: str = ""):
+    payload = {
+        "message": message,
+        "history": history,
+        "with_llm": True,
+        "temperature": temperature,
+    }
+    if token:
+        payload["token"] = token
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
             f"{AGENT_URL}/chat",
-            json={
-                "message": message,
-                "history": history,
-                "with_llm": True,
-                "temperature": temperature,
-            },
+            json=payload,
         )
         resp.raise_for_status()
         return resp.json()
@@ -276,10 +304,14 @@ async def on_message(message: cl.Message):
     msg = cl.Message(content="")
     await msg.send()
 
+    # 获取当前用户 Token
+    user = cl.user_session.get("user")
+    user_token = USER_TOKENS.get(user.identifier) if user else ""
+
     try:
         if mode == "chat":
             async with cl.Step(name="🤖 调用 AI Agent...") as step:
-                result = await call_agent_chat(query, history)
+                result = await call_agent_chat(query, history, token=user_token)
                 answer = result.get("answer", "无回答")
                 semantic = result.get("semantic")
                 sql = result.get("sql")
@@ -297,15 +329,16 @@ async def on_message(message: cl.Message):
 
             if sql:
                 async with cl.Step(name="💻 生成 SQL") as s:
-                    await cl.Message(content=f"```sql\n{sql}\n```", parent_id=s.id).send()
+                    sql_msg = cl.Message(content=f"```sql\n{sql}\n```")
+                    await sql_msg.send()
+                    s.child = sql_msg
 
             if data is not None:
                 async with cl.Step(name="📈 数据与图表") as s:
                     df = pd.DataFrame(data)
-                    await cl.Message(
-                        content=f"返回 **{len(df)}** 条记录",
-                        parent_id=s.id,
-                    ).send()
+                    record_msg = cl.Message(content=f"返回 **{len(df)}** 条记录")
+                    await record_msg.send()
+                    s.child = record_msg
 
                     # KPI cards for single row
                     if len(df) == 1 and semantic:
@@ -313,25 +346,25 @@ async def on_message(message: cl.Message):
                         for metric in metrics:
                             if metric in df.columns:
                                 val = df[metric].iloc[0]
-                                await cl.Message(
-                                    content=f"**{metric}**: `{val}`",
-                                    parent_id=s.id,
-                                ).send()
+                                kpi_msg = cl.Message(content=f"**{metric}**: `{val}`")
+                                await kpi_msg.send()
+                                s.child = kpi_msg
 
                     # Auto chart
                     fig = build_chart(data, semantic.get("metrics", []) if semantic else [], semantic.get("dimensions", []) if semantic else [])
                     if fig:
-                        await cl.Message(
-                            content="自动生成的图表：",
-                            parent_id=s.id,
-                        ).send()
-                        await cl.Plotly(fig, parent_id=s.id).send()
+                        chart_msg = cl.Message(content="自动生成的图表：")
+                        await chart_msg.send()
+                        s.child = chart_msg
+                        await cl.Plotly(figure=fig, name="图表").send(s.id)
 
                     # Data table
                     try:
-                        await cl.Dataframe(data=df.to_dict("records"), name="数据", parent_id=s.id).send()
+                        await cl.Dataframe(data=df.to_dict("records"), name="数据").send(s.id)
                     except Exception:
-                        await cl.Message(content=df.to_markdown(index=False), parent_id=s.id).send()
+                        table_msg = cl.Message(content=df.to_markdown(index=False))
+                        await table_msg.send()
+                        s.child = table_msg
 
             if llm_info:
                 async with cl.Step(name="🧠 LLM 信息") as s:
@@ -362,20 +395,26 @@ async def on_message(message: cl.Message):
 
             if sql:
                 async with cl.Step(name="💻 SQL") as s:
-                    await cl.Message(content=f"```sql\n{sql}\n```", parent_id=s.id).send()
+                    sql_msg = cl.Message(content=f"```sql\n{sql}\n```")
+                    await sql_msg.send()
+                    s.child = sql_msg
 
             if result.get("data") is not None:
                 data = result["data"]
                 df = pd.DataFrame(data)
                 async with cl.Step(name="📈 数据") as s:
-                    await cl.Message(content=f"返回 **{len(df)}** 条记录", parent_id=s.id).send()
+                    record_msg = cl.Message(content=f"返回 **{len(df)}** 条记录")
+                    await record_msg.send()
+                    s.child = record_msg
                     fig = build_chart(data, metrics, result.get("dimensions", []))
                     if fig:
-                        await cl.Plotly(fig, parent_id=s.id).send()
+                        await cl.Plotly(figure=fig, name="图表").send(s.id)
                     try:
-                        await cl.Dataframe(data=df.to_dict("records"), name="数据", parent_id=s.id).send()
+                        await cl.Dataframe(data=df.to_dict("records"), name="数据").send(s.id)
                     except Exception:
-                        await cl.Message(content=df.to_markdown(index=False), parent_id=s.id).send()
+                        table_msg = cl.Message(content=df.to_markdown(index=False))
+                        await table_msg.send()
+                        s.child = table_msg
 
     except Exception as e:
         msg.content = f"❌ 请求失败：{e}"
